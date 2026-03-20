@@ -12,6 +12,7 @@ import {
   WidgetRuntime,
   EvaluationResult,
   Submission,
+  resolveDefaults,
 } from "./core";
 
 // ============================================================
@@ -161,19 +162,34 @@ interface CreateWidgetConfig<T> {
   component: React.ComponentType;
 }
 
-export function createWidget<T extends { schema: any; __parameters: any }>(
-  config: CreateWidgetConfig<T>,
-) {
+export function createWidget<
+  T extends {
+    schema: any;
+    __parameters: any;
+    __deriveDefaults?: any;
+    __randomFns?: any;
+  },
+>(config: CreateWidgetConfig<T>) {
   type WidgetParams = ExtractParams<T>;
 
   console.log("📦 Widget definition:", config.definition);
 
-  // Send schema to host
+  // Resolve defaults (including randomization and derive logic)
+  const resolvedDefaults = resolveDefaults(
+    config.definition.schema,
+    config.definition.__randomFns,
+    config.definition.__deriveDefaults,
+  );
+
+  console.log("🎲 Resolved defaults:", resolvedDefaults);
+
+  // Send schema + resolved defaults to host
   setTimeout(() => {
     WidgetRuntime.sendToHost({
       type: "WIDGET_READY",
       payload: {
         schema: config.definition.schema,
+        resolvedDefaults,
       },
     });
   }, 100);
