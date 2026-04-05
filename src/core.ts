@@ -11,6 +11,11 @@ interface BaseParamConfig {
   random?: boolean;
   readOnly?: boolean;
   hidden?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  minFrom?: string;
+  maxFrom?: string;
 }
 
 type SingleCondition = {
@@ -28,6 +33,50 @@ type VisibilityCondition =
   | SingleCondition
   | { and: VisibilityCondition[] }
   | { or: VisibilityCondition[] };
+
+export type DifficultyLevel = "easy" | "medium" | "hard";
+
+export type DifficultyScalarValue = string | number | boolean;
+
+export interface DifficultyNumberRange {
+  type?: "number";
+  min: number;
+  max: number;
+  preset?: number;
+}
+
+export interface DifficultyBooleanMatch {
+  type: "boolean";
+  equals: boolean;
+  preset?: boolean;
+}
+
+export interface DifficultySelectMatch {
+  type: "select";
+  in: DifficultyScalarValue[];
+  preset?: DifficultyScalarValue;
+}
+
+export type DifficultyLevelRange =
+  | DifficultyNumberRange
+  | DifficultyBooleanMatch
+  | DifficultySelectMatch;
+
+export interface DifficultyDimension {
+  path: string;
+  weight?: number;
+  levels: Record<DifficultyLevel, DifficultyLevelRange>;
+}
+
+export interface DifficultyRule {
+  when?: VisibilityCondition;
+  dimensions: DifficultyDimension[];
+}
+
+export interface DifficultySyncConfig {
+  difficultyPath: string;
+  rules: DifficultyRule[];
+}
 
 // Evaluation result structure (required fields)
 export interface EvaluationResult {
@@ -128,17 +177,27 @@ class NumberParam extends BaseParam<number> {
   }
 
   min(value: number) {
-    (this.config as any).min = value;
+    this.config.min = value;
     return this;
   }
 
   max(value: number) {
-    (this.config as any).max = value;
+    this.config.max = value;
     return this;
   }
 
   step(value: number) {
-    (this.config as any).step = value;
+    this.config.step = value;
+    return this;
+  }
+
+  minFrom(paramPath: string) {
+    this.config.minFrom = paramPath;
+    return this;
+  }
+
+  maxFrom(paramPath: string) {
+    this.config.maxFrom = paramPath;
     return this;
   }
 }
@@ -449,6 +508,7 @@ export function defineWidget<
 >(config: {
   parameters: P;
   answer: A;
+  difficultySync?: DifficultySyncConfig;
   deriveDefaults?: (
     defaults: Record<string, any>,
     utils: DeriveUtils,
@@ -472,6 +532,7 @@ export function defineWidget<
     schema,
     __parameters: config.parameters,
     __answer: config.answer,
+    __difficultySync: config.difficultySync,
     __deriveDefaults: config.deriveDefaults,
     __randomFns: Object.keys(randomFns).length > 0 ? randomFns : undefined,
   };
@@ -519,9 +580,6 @@ export class WidgetRuntime {
         } else {
           // Không có __answer → exit review mode
           if (this.initialAnswer !== null) {
-            console.log(
-              "🔙 WidgetRuntime: Clearing initialAnswer (exit review mode)",
-            );
             this.initialAnswer = null;
             this.notifyAnswerListeners(); // Notify với null
           }
@@ -614,8 +672,6 @@ export class WidgetRuntime {
       answer,
       evaluation,
     };
-
-    console.log("📤 Submitting to host:", submission);
 
     this.sendToHost({
       type: "SUBMIT",

@@ -64,10 +64,8 @@ export function useSubmission<TAnswer = any>(
   // Listen for answer changes from host
   useEffect(() => {
     const unsubscribe = WidgetRuntime.onAnswerChange((answer) => {
-      console.log("📥 Initial answer received:", answer);
       // Nếu answer = null/undefined → exit review mode
       if (answer === null || answer === undefined) {
-        console.log("🔙 Exiting review mode - clearing answer");
         setInitialAnswer(undefined);
       } else {
         setInitialAnswer(answer);
@@ -116,7 +114,6 @@ export function useSubmission<TAnswer = any>(
 
     try {
       await WidgetRuntime.submit(answer, result);
-      console.log("✅ Submission successful");
     } catch (error) {
       console.error("❌ Submission failed:", error);
     } finally {
@@ -166,13 +163,12 @@ export function createWidget<
   T extends {
     schema: any;
     __parameters: any;
+    __difficultySync?: any;
     __deriveDefaults?: any;
     __randomFns?: any;
   },
 >(config: CreateWidgetConfig<T>) {
   type WidgetParams = ExtractParams<T>;
-
-  console.log("📦 Widget definition:", config.definition);
 
   // Resolve defaults (including randomization and derive logic)
   const resolvedDefaults = resolveDefaults(
@@ -181,8 +177,6 @@ export function createWidget<
     config.definition.__deriveDefaults,
   );
 
-  console.log("🎲 Resolved defaults:", resolvedDefaults);
-
   // Send schema + resolved defaults to host
   setTimeout(() => {
     WidgetRuntime.sendToHost({
@@ -190,6 +184,7 @@ export function createWidget<
       payload: {
         schema: config.definition.schema,
         resolvedDefaults,
+        difficultySync: config.definition.__difficultySync,
       },
     });
   }, 100);
@@ -200,7 +195,6 @@ export function createWidget<
 
     useEffect(() => {
       const unsubscribe = WidgetRuntime.onParamsChange((newParams) => {
-        console.log("📥 Params received:", newParams);
         setParams(newParams as WidgetParams);
       });
       return unsubscribe;

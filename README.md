@@ -1,9 +1,9 @@
-# `@moly-edu/widget-sdk`
+# @moly-edu/widget-sdk
 
 [![npm version](https://img.shields.io/npm/v/@moly-edu/widget-sdk.svg)](https://www.npmjs.com/package/@moly-edu/widget-sdk)
 [![npm downloads](https://img.shields.io/npm/dm/@moly-edu/widget-sdk.svg)](https://www.npmjs.com/package/@moly-edu/widget-sdk)
 
-A React-first SDK for building iframe-based learning widgets that are configured by a host app.
+A React-first SDK for building iframe-based learning widgets configured by a host application.
 
 ## Installation
 
@@ -11,9 +11,17 @@ A React-first SDK for building iframe-based learning widgets that are configured
 npm i @moly-edu/widget-sdk
 ```
 
+## What this SDK provides
+
+- Schema-first widget definition (`defineWidget`, `param`, `folder`, visibility rules)
+- Automatic default resolution (static defaults + random + deriveDefaults)
+- Runtime bridge between widget and host (`WIDGET_READY`, `PARAMS_UPDATE`, `SUBMIT`, TTS)
+- React hooks for params and submission
+- Optional host-driven difficulty synchronization (`difficultySync`)
+
 ## Quick Start
 
-## 1. Define your widget contract
+### 1. Define a widget contract
 
 ```ts
 import {
@@ -28,25 +36,23 @@ import {
 
 export const widgetDefinition = defineWidget({
   parameters: {
-    question: param.string("Solve the addition problem").label("Question"),
+    mode: param
+      .select(["practice", "challenge"] as const, "practice")
+      .label("Mode"),
 
     difficulty: param
-      .select(["easy", "medium", "hard"], "medium")
-      .label("Difficulty")
-      .random(),
+      .select(["easy", "medium", "hard"] as const, "medium")
+      .label("Difficulty"),
 
-    target: param
-      .number(10)
-      .label("Target")
-      .description("Derived from difficulty")
-      .min(1)
-      .max(100)
-      .readOnly(),
+    target: param.number(10).label("Target").min(1).max(100).random(),
+
+    boardMin: param.number(1).min(1).max(100).label("Board Min"),
+    boardMax: param.number(20).min(1).max(100).label("Board Max"),
 
     settings: folder("Settings", {
       showFeedback: param.boolean(true).label("Show feedback"),
       feedbackCorrect: param
-        .string("Great job!")
+        .string("Great job")
         .label("Correct feedback")
         .visibleIf(when("settings.showFeedback").equals(true)),
       showHint: param
@@ -62,13 +68,17 @@ export const widgetDefinition = defineWidget({
   },
 
   deriveDefaults: (defaults, { randomInt }) => {
+    if (defaults.boardMin > defaults.boardMax) {
+      return { boardMax: defaults.boardMin };
+    }
+
     switch (defaults.difficulty) {
       case "easy":
-        return { target: randomInt(5, 15) };
+        return { target: randomInt(5, 20) };
       case "hard":
-        return { target: randomInt(50, 100) };
+        return { target: randomInt(60, 100) };
       default:
-        return { target: randomInt(15, 50) };
+        return { target: randomInt(20, 60) };
     }
   },
 
@@ -81,7 +91,7 @@ export type WidgetParams = ExtractParams<typeof widgetDefinition>;
 export type WidgetAnswer = ExtractAnswer<typeof widgetDefinition>;
 ```
 
-## 2. Mount the widget
+### 2. Mount the widget
 
 ```ts
 import { createWidget } from "@moly-edu/widget-sdk";
@@ -94,7 +104,7 @@ createWidget({
 });
 ```
 
-## 3. Use params and submission in React
+### 3. Consume params and submission in React
 
 ```tsx
 import { useWidgetParams, useSubmission } from "@moly-edu/widget-sdk";
@@ -102,7 +112,6 @@ import type { WidgetParams, WidgetAnswer } from "./definition";
 
 export function WidgetComponent() {
   const params = useWidgetParams<WidgetParams>();
-  const correctAnswer = 42;
 
   const {
     answer,
@@ -114,7 +123,7 @@ export function WidgetComponent() {
     isSubmitting,
   } = useSubmission<WidgetAnswer>({
     evaluate: (ans) => {
-      const isCorrect = ans.value === String(correctAnswer);
+      const isCorrect = ans.value === String(params.target);
       return {
         isCorrect,
         score: isCorrect ? 100 : 0,
@@ -125,7 +134,7 @@ export function WidgetComponent() {
 
   return (
     <div>
-      <h2>{params.question}</h2>
+      <h2>Target: {params.target}</h2>
       <input
         value={answer?.value ?? ""}
         onChange={(e) => setAnswer({ value: e.target.value })}
@@ -140,7 +149,7 @@ export function WidgetComponent() {
 }
 ```
 
-## Parameter API
+## Parameter DSL
 
 Factory methods:
 
@@ -150,16 +159,6 @@ Factory methods:
 - `param.color(defaultValue?)`
 - `param.image(defaultValue?)`
 - `param.select(options, defaultValue?)`
-
-Number modifiers:
-
-- `.min(value)`
-- `.max(value)`
-- `.step(value)`
-
-Image modifier:
-
-- `.placeholder(text)`
 
 Common modifiers:
 
@@ -171,6 +170,20 @@ Common modifiers:
 - `.random((utils) => value)`
 - `.readOnly()`
 - `.hidden()`
+
+Number modifiers:
+
+- `.min(value)`
+- `.max(value)`
+- `.step(value)`
+- `.minFrom(paramPath)`
+- `.maxFrom(paramPath)`
+
+`minFrom` and `maxFrom` allow dynamic numeric constraints based on other parameter paths.
+
+Image modifier:
+
+- `.placeholder(text)`
 
 Folder groups:
 
@@ -213,7 +226,7 @@ Supported operators:
 - `lt`
 - `lte`
 
-## Random Defaults and deriveDefaults
+## Default Resolution Pipeline
 
 When `createWidget(...)` runs, defaults are resolved in this order:
 
@@ -221,21 +234,75 @@ When `createWidget(...)` runs, defaults are resolved in this order:
 2. Apply `.random()` rules.
 3. Apply `deriveDefaults(defaults, utils)` overrides.
 
-Utilities available in random/derive:
+Utilities available in random and derive logic:
 
 - `randomInt(min, max)`
 - `randomFloat(min, max)`
 - `randomChoice(items)`
 
-You can also call `resolveDefaults(...)` directly for testing.
+You can also call `resolveDefaults(...)` directly for tests.
+
+## Difficulty Sync
+
+The SDK supports optional metadata that the host can use for two-way difficulty synchronization.
+
+Add `difficultySync` in `defineWidget`:
+
+```ts
+difficultySync: {
+  difficultyPath: "difficulty",
+  rules: [
+    {
+      when: when("mode").equals("challenge"),
+      dimensions: [
+        {
+          path: "target",
+          weight: 1,
+          levels: {
+            easy: { min: 1, max: 20, preset: 10 },
+            medium: { min: 21, max: 60, preset: 40 },
+            hard: { min: 61, max: 100, preset: 80 },
+          },
+        },
+        {
+          path: "settings.showHint",
+          weight: 0.4,
+          levels: {
+            easy: { type: "boolean", equals: true, preset: true },
+            medium: { type: "boolean", equals: false, preset: false },
+            hard: { type: "boolean", equals: false, preset: false },
+          },
+        },
+        {
+          path: "mode",
+          weight: 0.2,
+          levels: {
+            easy: { type: "select", in: ["practice"] },
+            medium: { type: "select", in: ["challenge"] },
+            hard: { type: "select", in: ["challenge"] },
+          },
+        },
+      ],
+    },
+  ],
+}
+```
+
+Level rules support three shapes:
+
+- Number range: `{ min, max, preset? }`
+- Boolean match: `{ type: "boolean", equals, preset? }`
+- Select bucket: `{ type: "select", in, preset? }`
+
+The SDK forwards this metadata to host in `WIDGET_READY` payload.
 
 ## React Hooks
 
-## `useWidgetParams<T>()`
+### `useWidgetParams<T>()`
 
-Returns the latest params from host.
+Returns latest params from host.
 
-## `useSubmission<TAnswer>({ evaluate })`
+### `useSubmission<TAnswer>({ evaluate })`
 
 Manages answer state, computes evaluation, and submits to host.
 
@@ -249,15 +316,15 @@ Returns:
 - `canSubmit`
 - `isSubmitting`
 
-## `useWidgetState` (legacy)
+### `useWidgetState` (legacy)
 
 Backward-compatible helper hook.
 
-## Speak Component (Host-Managed TTS)
+## Speak Component (Host-managed TTS)
 
 The SDK exports `Speak` for read-aloud UI.
-Important: the widget does not call your TTS API directly.
-It sends a TTS request to host via bridge messages, and host handles synthesis + playback.
+Widgets do not call your TTS API directly.
+Widgets send bridge messages and host performs synthesis and playback.
 
 ```tsx
 import { Speak } from "@moly-edu/widget-sdk";
@@ -271,7 +338,7 @@ import { Speak } from "@moly-edu/widget-sdk";
 Props:
 
 - `text?`
-- `lang?` (default `vi-VN`)
+- `lang?` default `vi-VN`
 - `rate?`
 - `timeoutMs?`
 - `showIcon?` = `auto | always | hover`
@@ -279,48 +346,50 @@ Props:
 
 Mobile behavior:
 
-- `showIcon="auto"` shows the icon by default on touch/coarse-pointer devices.
+- `showIcon="auto"` shows icon by default on coarse-pointer devices.
 
-## Host-Widget Message Protocol
+## Host-widget Message Protocol
 
-Widget -> Host:
+Widget to Host:
 
-- `WIDGET_READY` with payload `{ schema, resolvedDefaults }`
-- `SUBMIT` with payload `{ answer, evaluation }`
-- `EVENT` with custom payload
-- `TTS_SYNTHESIZE` with payload `{ requestId, text, lang?, rate? }`
+- `WIDGET_READY` payload `{ schema, resolvedDefaults, difficultySync }`
+- `SUBMIT` payload `{ answer, evaluation }`
+- `EVENT` payload custom
+- `TTS_SYNTHESIZE` payload `{ requestId, text, lang?, rate? }`
 - `TTS_STOP`
 
-Host -> Widget:
+Host to Widget:
 
-- `PARAMS_UPDATE` with payload config (optional `__answer` for review mode)
-- `TTS_SYNTHESIZE_RESULT` with payload `{ requestId, ok, error? }`
+- `PARAMS_UPDATE` payload config, optional `__answer` for review mode
+- `TTS_SYNTHESIZE_RESULT` payload `{ requestId, ok, error? }`
 
 Notes:
 
 - `__answer` enables review mode in widget runtime.
-- Host should validate message source (current iframe) before processing.
+- Host should validate message source and origin before processing.
 
-## WidgetRuntime (Advanced)
+## WidgetRuntime (advanced)
 
 Most apps should use hooks, but these methods are available:
 
 - `WidgetRuntime.emitEvent(eventName, data?)`
 - `WidgetRuntime.requestTtsSpeak({ text, lang?, rate?, timeoutMs? })`
+- `WidgetRuntime.requestTtsAudio(...)` alias of `requestTtsSpeak`
 - `WidgetRuntime.stopTts()`
+- `WidgetRuntime.getInitialAnswer()`
 
-## Development Scripts
+## Development scripts
 
-In widget-sdk:
+In `widget-sdk`:
 
 ```bash
 npm run dev
 npm run build
 ```
 
-## Vite + file: Dependency Note
+## Vite and local file dependencies note
 
-If you see duplicate React hook errors such as Invalid hook call, add this to the widget app Vite config:
+If your widget app consumes SDK via local `file:` dependency and you hit duplicate React hook errors, add this in widget app Vite config:
 
 ```ts
 resolve: {
@@ -328,9 +397,9 @@ resolve: {
 }
 ```
 
-## Current Exports
+## Exports
 
-From core:
+From `core`:
 
 - `defineWidget`
 - `param`
@@ -340,16 +409,16 @@ From core:
 - `or`
 - `resolveDefaults`
 - `WidgetRuntime`
-- random utilities and types
+- random utilities and shared types
 
-From widget:
+From `widget`:
 
 - `createWidget`
 - `useWidgetParams`
 - `useSubmission`
 - `useWidgetState`
 
-From speak:
+From `speak`:
 
 - `Speak`
 - `SpeakProps`
