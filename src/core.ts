@@ -104,6 +104,109 @@ export interface TtsResponsePayload {
   error?: string;
 }
 
+export interface SttListenRequestPayload {
+  requestId: string;
+  lang?: string;
+  timeoutMs?: number;
+  mode?: "free-text" | "number";
+}
+
+export interface SttListenResponsePayload {
+  requestId: string;
+  ok: boolean;
+  transcript?: string;
+  error?: string;
+}
+
+function normalizeSpeechText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseSpokenInteger(text: string): number | null {
+  const directDigits = text.match(/-?\d+/);
+  if (directDigits) {
+    const parsed = Number.parseInt(directDigits[0], 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  const normalized = normalizeSpeechText(text);
+  if (!normalized) return null;
+
+  const words = normalized.split(" ").filter(Boolean);
+
+  const unitMap: Record<string, number> = {
+    khong: 0,
+    zero: 0,
+    mot: 1,
+    one: 1,
+    hai: 2,
+    two: 2,
+    ba: 3,
+    three: 3,
+    bon: 4,
+    tu: 4,
+    four: 4,
+    nam: 5,
+    lam: 5,
+    five: 5,
+    sau: 6,
+    six: 6,
+    bay: 7,
+    seven: 7,
+    tam: 8,
+    eight: 8,
+    chin: 9,
+    nine: 9,
+  };
+
+  const englishTens: Record<string, number> = {
+    ten: 10,
+    twenty: 20,
+    thirty: 30,
+    forty: 40,
+    fifty: 50,
+    sixty: 60,
+    seventy: 70,
+    eighty: 80,
+    ninety: 90,
+  };
+
+  if (words.length === 1) {
+    const singleWord = words[0];
+    if (singleWord in unitMap) return unitMap[singleWord];
+    if (singleWord in englishTens) return englishTens[singleWord];
+  }
+
+  if (words[0] === "muoi") {
+    const ones = unitMap[words[1] || ""];
+    return 10 + (ones ?? 0);
+  }
+
+  const firstUnit = unitMap[words[0] || ""];
+  if (firstUnit !== undefined && firstUnit >= 2 && words[1] === "muoi") {
+    let value = firstUnit * 10;
+    const tailWord =
+      words[2] === "linh" || words[2] === "le" ? words[3] : words[2];
+    const tail = unitMap[tailWord || ""];
+    if (tail !== undefined) value += tail;
+    return value;
+  }
+
+  const englishTen = englishTens[words[0] || ""];
+  if (englishTen !== undefined) {
+    const tail = unitMap[words[1] || ""];
+    return englishTen + (tail ?? 0);
+  }
+
+  return null;
+}
+
 // ============================================================
 // PARAM CLASSES
 // ============================================================
@@ -563,6 +666,14 @@ export class WidgetRuntime {
       timeoutId: number;
     }
   > = new Map();
+  private static sttPending: Map<
+    string,
+    {
+      resolve: (transcript: string) => void;
+      reject: (error: Error) => void;
+      timeoutId: number;
+    }
+  > = new Map();
 
   static init() {
     window.addEventListener("message", (event) => {
@@ -607,6 +718,29 @@ export class WidgetRuntime {
         }
 
         pending.reject(new Error(payload?.error || "TTS synthesis failed"));
+      }
+
+      if (event.data.type === "STT_LISTEN_RESULT") {
+        const payload = event.data.payload as
+          | SttListenResponsePayload
+          | undefined;
+        const requestId = payload?.requestId;
+        if (!requestId) return;
+
+        const pending = this.sttPending.get(requestId);
+        if (!pending) return;
+
+        window.clearTimeout(pending.timeoutId);
+        this.sttPending.delete(requestId);
+
+        if (payload?.ok && payload.transcript) {
+          pending.resolve(payload.transcript);
+          return;
+        }
+
+        pending.reject(
+          new Error(payload?.error || "Speech recognition failed"),
+        );
       }
     });
 
@@ -749,6 +883,76 @@ export class WidgetRuntime {
     this.ttsPending.clear();
 
     this.sendToHost({ type: "TTS_STOP" });
+  }
+
+  static requestSpeechToText({
+    lang = "vi-VN",
+    timeoutMs = 10000,
+    mode = "free-text",
+  }: {
+    lang?: string;
+    timeoutMs?: number;
+    mode?: "free-text" | "number";
+  } = {}): Promise<string> {
+    if (window.parent === window) {
+      return Promise.reject(
+        new Error("STT host bridge requires running inside an iframe"),
+      );
+    }
+
+    const requestId = `stt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    return new Promise<string>((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        this.sttPending.delete(requestId);
+        reject(new Error("STT request timeout"));
+      }, timeoutMs);
+
+      this.sttPending.set(requestId, { resolve, reject, timeoutId });
+
+      const payload: SttListenRequestPayload = {
+        requestId,
+        lang,
+        timeoutMs,
+        mode,
+      };
+
+      this.sendToHost({
+        type: "STT_LISTEN",
+        payload,
+      });
+    });
+  }
+
+  static async requestSpokenNumber({
+    lang = "vi-VN",
+    timeoutMs = 10000,
+  }: {
+    lang?: string;
+    timeoutMs?: number;
+  } = {}): Promise<string> {
+    const transcript = await this.requestSpeechToText({
+      lang,
+      timeoutMs,
+      mode: "number",
+    });
+
+    const parsed = parseSpokenInteger(transcript);
+    if (parsed === null) {
+      throw new Error("No number recognized from speech");
+    }
+
+    return String(parsed);
+  }
+
+  static stopStt() {
+    this.sttPending.forEach((pending) => {
+      window.clearTimeout(pending.timeoutId);
+      pending.reject(new Error("STT stopped"));
+    });
+    this.sttPending.clear();
+
+    this.sendToHost({ type: "STT_STOP" });
   }
 }
 
