@@ -1,6 +1,6 @@
 {
   "name": "@moly-edu/widget-sdk",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Widget SDK in Moly learning platform",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
